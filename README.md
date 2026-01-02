@@ -46,19 +46,19 @@ Once in interactive mode, you can use these commands:
 
 ```
 # Search for accounts
-sf> search Account Axalta
+sf> search Account Amazon
 
 # Select a record from results
 sf [Account]> select 1
 
 # View related contacts
-sf [Account:Axalta]> related Contacts
+sf [Account:Amazon]> related Contacts
 
 # View all available fields
-sf [Account:Axalta]> fields
+sf [Account:Amazon]> fields
 
 # Go back
-sf [Account:Axalta]> back
+sf [Account:Amazon]> back
 
 # Get help
 sf> help
@@ -70,7 +70,7 @@ Execute one-off commands:
 
 ```powershell
 # Search for accounts
-python sfcli.py search Account "Axalta"
+python sfcli.py search Account "Amazon"
 
 # Get a specific record
 python sfcli.py get Account 001xxxxxxxxxxxxxxx
@@ -85,7 +85,7 @@ python sfcli.py query "SELECT Id, Name FROM Account WHERE Type='Customer' LIMIT 
 ## Interactive Commands
 
 ### Search & Query
-- `search <Object> <query>` - Search for records (e.g., 'search Account Axalta')
+- `search <Object> <query>` - Search for records (e.g., 'search Account Amazon')
 - `get <Object> <ID>` - Get a specific record by ID
 - `query <SOQL>` - Execute raw SOQL query
 - `list objects` - List available Salesforce objects
@@ -105,16 +105,16 @@ python sfcli.py query "SELECT Id, Name FROM Account WHERE Type='Customer' LIMIT 
 
 ### Example 1: Search and View Account
 ```
-sf> search Account Axalta
+sf> search Account Amazon
 # Results shown in table format
 
 sf [Account]> select 1
 # Full account details displayed
 
-sf [Account:Axalta Coating Systems]> related Opportunities
+sf [Account:Amazon]> related Opportunities
 # Related opportunities shown
 
-sf [Account:Axalta Coating Systems]> back
+sf [Account:Amazon]> back
 # Return to account view
 ```
 
