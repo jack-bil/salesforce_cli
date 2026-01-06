@@ -48,6 +48,8 @@ class InteractiveSession:
         self.related_type: Optional[str] = None
         # Navigation stack for browser-like back button
         self.navigation_stack: List[Dict[str, Any]] = []
+        # Navigation path for prompt display (e.g., ['Account:Caliber 1516', 'Opportunities'])
+        self.navigation_path: List[str] = []
     
     def _show_banner(self):
         """Display startup banner."""
@@ -80,8 +82,9 @@ class InteractiveSession:
             Text("Quick Start:", style="bold yellow"),
             Text("  • search Account <name>  - Find records", style="dim"),
             Text("  • Type number to select   - Quick navigation", style="dim"),
-            Text("  • show <fields>           - Display specific fields", style="dim"),
-            Text("  • back                    - Navigate history", style="dim"),
+            Text("  • cd Opportunities        - Navigate folders", style="dim"),
+            Text("  • ls / dir                - Show current list", style="dim"),
+            Text("  • cd .. / back            - Go back", style="dim"),
             Text("  • help                    - See all commands", style="dim"),
             Text(""),
             Text("Type 'exit' to quit", style="dim italic")
@@ -101,8 +104,11 @@ class InteractiveSession:
         
         while True:
             try:
-                # Build prompt
-                if self.current_record:
+                # Build prompt with navigation path
+                if self.navigation_path:
+                    path_str = ' / '.join(self.navigation_path)
+                    prompt_text = f"sf [{path_str}]> "
+                elif self.current_record:
                     prompt_text = f"sf [{self.current_object}:{self.current_record.get('Name', 'Record')}]> "
                 elif self.current_object:
                     prompt_text = f"sf [{self.current_object}]> "
@@ -132,15 +138,27 @@ class InteractiveSession:
     
     def _get_completer(self) -> WordCompleter:
         """Get command completer based on current context."""
-        base_commands = ['search', 'get', 'list', 'query', 'help', 'exit', 'back', 'clear', 'update', 'describe', '--fields', '--limit']
+        base_commands = ['search', 'get', 'list', 'query', 'help', 'exit', 'back', 'clear', 'update', 'describe', 'cd', 'ls', 'dir', '--fields', '--limit']
         
         if self.related_records:
             commands = base_commands + ['select', 'view']
         elif self.current_record:
-            # Add relationship names for the current object
+            # Get relationship names dynamically from Salesforce metadata
             relationship_names = []
-            if self.current_object in self.RELATIONSHIPS:
-                relationship_names = self.RELATIONSHIPS[self.current_object]
+            try:
+                relationships = self.client.get_child_relationships(self.current_object)
+                relationship_names = [rel['name'] for rel in relationships]
+                # For custom objects (relationships ending in __r), also add the __c version
+                # to make it more intuitive for users
+                for rel_name in list(relationship_names):
+                    if rel_name.endswith('__r'):
+                        object_name = rel_name[:-1] + 'c'  # Convert __r to __c
+                        relationship_names.append(object_name)
+            except:
+                # Fallback to static relationships if API call fails
+                if self.current_object in self.RELATIONSHIPS:
+                    relationship_names = self.RELATIONSHIPS[self.current_object]
+            
             # Add field names from current record for show command tab completion
             field_names = list(self.current_record.keys())
             commands = base_commands + ['view', 'related', 'relationships', 'fields', 'show', 'history', 'parent', 'ultimateparent', 'children', 'all'] + relationship_names + field_names
@@ -183,6 +201,24 @@ class InteractiveSession:
         
         elif command == 'back':
             self._go_back()
+        
+        elif command == 'cd':
+            if args == '..':
+                self._go_back()
+            elif args and self.current_record:
+                # cd <relationship> changes context without displaying
+                self._handle_cd(args)
+            elif args:
+                display_error("No current record. Use 'search' or 'get' first.")
+            else:
+                display_error("Usage: cd .. (go back) or cd <relationship> (navigate to related records)")
+        
+        elif command == 'ls' or command == 'dir':
+            # Check if there's a pipe for sorting
+            if '|' in user_input:
+                self._handle_ls_with_pipe(user_input)
+            else:
+                self._handle_ls()
         
         elif command == 'clear':
             console.clear()
@@ -277,13 +313,17 @@ class InteractiveSession:
             console.print("  history [field]          - View all field changes or specific field (e.g., 'history')")
             console.print("  fields                   - List all available fields")
             console.print("  relationships            - Show all available related objects")
-            console.print("  related <type>           - View related records (e.g., 'related Contacts')")
+            console.print("  related <type>           - View related records immediately (e.g., 'related Contacts')")
             console.print("  parent [field1 field2]   - Jump to parent Account (e.g., 'parent' or 'parent Name Phone')")
             console.print("  ultimateparent [field1 field2] - Jump to Ultimate Parent Account")
             console.print("  children [field1 field2] - View child Accounts (e.g., 'children' or 'children Name City')")
         
         console.print("\n[yellow]Navigation:[/yellow]")
+        console.print("  cd <relationship>        - Navigate to related records (e.g., 'cd Opportunities')")
+        console.print("  cd ..                    - Go back to previous context")
         console.print("  back                     - Go back to previous context")
+        console.print("  ls / dir                 - List current context (show table)")
+        console.print("  ls | sort <field> [-desc|-asc] - List and sort by field (e.g., 'ls | sort CreatedDate -desc')")
         console.print("  clear                    - Clear screen")
         console.print("  exit / quit              - Exit the CLI")
         console.print()
@@ -299,6 +339,7 @@ class InteractiveSession:
                 self.current_record = None
                 self.related_records = []
                 self.related_type = None
+                self.navigation_path = []
                 display_info("Returned to root")
             else:
                 display_info("Already at root level")
@@ -307,6 +348,12 @@ class InteractiveSession:
         # Pop the previous context from stack
         previous_context = self.navigation_stack.pop()
         context_type = previous_context['type']
+        
+        # Restore navigation path if it exists
+        if 'navigation_path' in previous_context:
+            self.navigation_path = previous_context['navigation_path']
+        else:
+            self.navigation_path = []
         
         # Restore the previous context
         if context_type == 'search':
@@ -324,17 +371,12 @@ class InteractiveSession:
             self.current_records = []
             self.related_records = []
             self.related_type = None
-            display_record(self.current_record, self.current_object)
-            display_info(f"Returned to {self.current_object} record view")
             
         elif context_type == 'related':
             self.current_object = previous_context['object']
             self.current_record = previous_context['parent_record']
             self.related_records = previous_context['records']
             self.related_type = previous_context['related_type']
-            parent_name = self.current_record.get('Name', self.current_record['Id'])
-            display_related_records(self.related_records, self.related_type, parent_name)
-            display_info(f"Returned to {self.related_type} list")
     
     def _handle_search(self, args: str):
         """Handle search command."""
@@ -392,6 +434,7 @@ class InteractiveSession:
             self.current_record = None
             self.related_records = []
             self.related_type = None
+            self.navigation_path = []
             display_search_results(self.current_records, object_type, total_count)
             
             if self.current_records:
@@ -528,12 +571,14 @@ class InteractiveSession:
                 self.navigation_stack.append({
                     'type': 'search',
                     'object': self.current_object,
-                    'records': self.current_records
+                    'records': self.current_records,
+                    'navigation_path': self.navigation_path.copy()
                 })
                 
                 # Fetch full record details
                 self.current_record = self.client.get_record(self.current_object, record_id)
                 self.current_records = []  # Clear search results
+                self.navigation_path = []  # Clear navigation path when selecting new record
                 
                 # Show compact confirmation instead of full record
                 record_name = self.current_record.get('Name', self.current_record.get('Id', 'Record'))
@@ -544,7 +589,7 @@ class InteractiveSession:
                 if self.current_object in self.RELATIONSHIPS:
                     related = self.RELATIONSHIPS[self.current_object]
                     console.print(f"[dim]Available related objects: {', '.join(related)}[/dim]")
-                    console.print("[dim]Use 'related <type>' to view related records[/dim]\n")
+                    console.print("[dim]Use 'cd <type>' or 'related <type>' to view related records[/dim]\n")
             else:
                 display_error(f"Invalid selection. Choose a number between 1 and {len(self.current_records)}")
         except ValueError:
@@ -614,6 +659,212 @@ class InteractiveSession:
                 display_info("Use 'select <number>' to view a related record")
         except Exception as e:
             display_error(f"Failed to get related records: {e}")
+    
+    def _handle_cd(self, args: str):
+        """Handle cd command to navigate to related records without displaying."""
+        if not self.current_record:
+            display_error("No record selected")
+            return
+        
+        relationship_name = args.strip()
+        
+        # If user provides a custom object name (__c), try to convert to relationship name (__r)
+        # This makes it more intuitive for users
+        if relationship_name.endswith('__c'):
+            relationship_name_r = relationship_name[:-1] + 'r'  # Replace __c with __r
+            # Try with __r first
+            try:
+                related_records = self.client.get_related_records(
+                    self.current_object,
+                    self.current_record['Id'],
+                    relationship_name_r
+                )
+                relationship_name = relationship_name_r  # Use the __r version
+            except:
+                # If __r doesn't work, try the original __c version
+                try:
+                    related_records = self.client.get_related_records(
+                        self.current_object,
+                        self.current_record['Id'],
+                        relationship_name
+                    )
+                except Exception as e:
+                    display_error(f"Failed to navigate to related records: {e}")
+                    return
+        else:
+            try:
+                # Query for related records
+                related_records = self.client.get_related_records(
+                    self.current_object,
+                    self.current_record['Id'],
+                    relationship_name
+                )
+            except Exception as e:
+                display_error(f"Failed to navigate to related records: {e}")
+                return
+        
+        try:
+            
+            # Push current record context to stack
+            self.navigation_stack.append({
+                'type': 'record',
+                'object': self.current_object,
+                'record': self.current_record,
+                'navigation_path': self.navigation_path.copy()
+            })
+            
+            # Store related records for potential selection
+            self.related_records = related_records
+            self.related_type = relationship_name
+            
+            # Update navigation path
+            if not self.navigation_path:
+                # Starting from a record
+                record_name = self.current_record.get('Name', self.current_record.get('Id', 'Record'))
+                self.navigation_path = [f"{self.current_object}:{record_name}", relationship_name]
+            else:
+                # Already in a path, append the relationship
+                self.navigation_path.append(relationship_name)
+            
+        except Exception as e:
+            display_error(f"Failed to navigate to related records: {e}")
+    
+    def _handle_ls(self):
+        """Handle ls/dir command to display current context."""
+        if self.related_records:
+            # Display related records
+            parent_name = self.navigation_path[0] if self.navigation_path else "Record"
+            display_related_records(self.related_records, self.related_type, parent_name)
+            if self.related_records:
+                display_info("Type a number to select a record")
+        elif self.current_records:
+            # Display search results
+            display_search_results(self.current_records, self.current_object)
+            if self.current_records:
+                display_info("Type a number to select a record")
+        elif self.current_record:
+            # Display available relationships like a directory listing
+            try:
+                relationships = self.client.get_child_relationships(self.current_object)
+                
+                if not relationships:
+                    display_info("No related objects found for this record")
+                    return
+                
+                # Filter and group relationships
+                common_rel_names = ['Contacts', 'Opportunities', 'Cases', 'Tasks', 'Events', 
+                                   'Orders', 'Contracts', 'Assets', 'Quotes', 'OpportunityLineItems']
+                common_rels = []
+                other_rels = []
+                
+                for rel in relationships:
+                    if rel['name'] in common_rel_names:
+                        common_rels.append(rel)
+                    else:
+                        other_rels.append(rel)
+                
+                console.print(f"\n[bold cyan]Available relationships for {self.current_object}:[/bold cyan]\n")
+                
+                # Display common relationships first
+                if common_rels:
+                    console.print("[green]Common relationships:[/green]")
+                    for rel in sorted(common_rels, key=lambda x: x['name']):
+                        console.print(f"  [cyan]{rel['name']:30}[/cyan] → {rel['object']}")
+                
+                # Display other relationships
+                if other_rels:
+                    if common_rels:
+                        console.print(f"\n[dim]Other relationships ({len(other_rels)} total):[/dim]")
+                    # Show first 20
+                    for rel in sorted(other_rels, key=lambda x: x['name'])[:20]:
+                        console.print(f"  [cyan]{rel['name']:30}[/cyan] → {rel['object']}")
+                    
+                    if len(other_rels) > 20:
+                        console.print(f"  [dim]... and {len(other_rels) - 20} more[/dim]")
+                
+                console.print(f"\n[dim]Use 'cd <name>' to navigate (e.g., 'cd Contacts')[/dim]")
+                console.print()
+                
+            except Exception as e:
+                display_error(f"Failed to get relationships: {e}")
+        else:
+            display_info("No records to display. Use 'search' to find records.")
+    
+    def _handle_ls_with_pipe(self, full_command: str):
+        """Handle ls/dir command with pipe for sorting."""
+        # Parse the pipe command: ls | sort FieldName -desc
+        parts = full_command.split('|')
+        if len(parts) != 2:
+            display_error("Invalid pipe syntax. Usage: ls | sort <FieldName> [-desc|-asc]")
+            return
+        
+        pipe_command = parts[1].strip()
+        
+        # Parse sort command
+        if not pipe_command.startswith('sort'):
+            display_error("Only 'sort' is supported after pipe. Usage: ls | sort <FieldName> [-desc|-asc]")
+            return
+        
+        sort_parts = pipe_command.split()
+        if len(sort_parts) < 2:
+            display_error("Usage: ls | sort <FieldName> [-desc|-asc]")
+            return
+        
+        field_name = sort_parts[1]
+        descending = False
+        
+        # Check for -desc or -asc flag
+        if len(sort_parts) > 2:
+            if sort_parts[2] == '-desc':
+                descending = True
+            elif sort_parts[2] == '-asc':
+                descending = False
+            else:
+                display_error("Invalid sort order. Use -desc or -asc")
+                return
+        
+        # Sort and display
+        if self.related_records:
+            sorted_records = self._sort_records(self.related_records, field_name, descending)
+            if sorted_records is not None:
+                parent_name = self.navigation_path[0] if self.navigation_path else "Record"
+                display_related_records(sorted_records, self.related_type, parent_name)
+                if sorted_records:
+                    display_info("Type a number to select a record")
+        elif self.current_records:
+            sorted_records = self._sort_records(self.current_records, field_name, descending)
+            if sorted_records is not None:
+                display_search_results(sorted_records, self.current_object)
+                if sorted_records:
+                    display_info("Type a number to select a record")
+        elif self.current_record:
+            display_info("Cannot sort a single record. Use 'ls' without sort.")
+        else:
+            display_info("No records to display. Use 'search' to find records.")
+    
+    def _sort_records(self, records: List[Dict[str, Any]], field_name: str, descending: bool) -> Optional[List[Dict[str, Any]]]:
+        """Sort records by a field name."""
+        if not records:
+            return records
+        
+        # Check if field exists in records
+        if field_name not in records[0]:
+            available_fields = [k for k in records[0].keys() if not k.startswith('attributes')]
+            display_error(f"Field '{field_name}' not found in records.")
+            console.print(f"[dim]Available fields: {', '.join(available_fields)}[/dim]")
+            return None
+        
+        try:
+            # Sort records, handling None values
+            sorted_records = sorted(
+                records,
+                key=lambda x: (x.get(field_name) is None, x.get(field_name) or ''),
+                reverse=descending
+            )
+            return sorted_records
+        except Exception as e:
+            display_error(f"Failed to sort records: {e}")
+            return None
     
     def _handle_fields(self):
         """Handle fields command to show all available fields."""
@@ -1345,7 +1596,8 @@ class InteractiveSession:
                     'object': self.current_object,
                     'parent_record': self.current_record,
                     'related_type': self.related_type,
-                    'records': self.related_records
+                    'records': self.related_records,
+                    'navigation_path': self.navigation_path.copy()
                 })
                 
                 # Update context - we're now viewing a different object type
@@ -1353,6 +1605,7 @@ class InteractiveSession:
                 self.current_record = full_record
                 self.related_records = []
                 self.related_type = None
+                self.navigation_path = []  # Clear navigation path when selecting new record
                 
                 display_record(full_record, actual_object)
                 
@@ -1360,7 +1613,7 @@ class InteractiveSession:
                 if actual_object in self.RELATIONSHIPS:
                     related = self.RELATIONSHIPS[actual_object]
                     console.print(f"[dim]Available related objects: {', '.join(related)}[/dim]")
-                    console.print("[dim]Use 'related <type>' to view related records[/dim]\n")
+                    console.print("[dim]Use 'cd <type>' or 'related <type>' to view related records[/dim]\n")
             else:
                 display_error(f"Invalid selection. Choose a number between 1 and {len(self.related_records)}")
         except ValueError:
