@@ -82,9 +82,9 @@ class InteractiveSession:
             Text("Quick Start:", style="bold yellow"),
             Text("  • search Account <name>  - Find records", style="dim"),
             Text("  • Type number to select   - Quick navigation", style="dim"),
-            Text("  • cd Opportunities        - Navigate folders", style="dim"),
-            Text("  • ls / dir                - Show current list", style="dim"),
-            Text("  • cd .. / back            - Go back", style="dim"),
+            Text("  • cd Opportunities        - Navigate into related records", style="dim"),
+            Text("  • ls | sort Name -desc    - List and sort", style="dim"),
+            Text("  • cd ..                   - Go back", style="dim"),
             Text("  • help                    - See all commands", style="dim"),
             Text(""),
             Text("Type 'exit' to quit", style="dim italic")
@@ -199,9 +199,6 @@ class InteractiveSession:
         elif command == 'help':
             self._show_help()
         
-        elif command == 'back':
-            self._go_back()
-        
         elif command == 'cd':
             if args == '..':
                 self._go_back()
@@ -256,9 +253,6 @@ class InteractiveSession:
         
         elif command == 'view' and self.current_record:
             self._handle_view()
-        
-        elif command == 'related' and self.current_record:
-            self._handle_related(args)
         
         elif command == 'fields' and self.current_record:
             self._handle_fields()
@@ -324,19 +318,20 @@ class InteractiveSession:
             console.print("  history [field]          - View all field changes or specific field (e.g., 'history')")
             console.print("  fields                   - List all available fields")
             console.print("  relationships            - Show all available related objects")
-            console.print("  related <type>           - View related records immediately (e.g., 'related Contacts')")
             console.print("  parent [field1 field2]   - Jump to parent Account (e.g., 'parent' or 'parent Name Phone')")
             console.print("  ultimateparent [field1 field2] - Jump to Ultimate Parent Account")
             console.print("  children [field1 field2] - View child Accounts (e.g., 'children' or 'children Name City')")
         
-        console.print("\n[yellow]Navigation:[/yellow]")
-        console.print("  cd <relationship>        - Navigate to related records (e.g., 'cd Opportunities')")
+        console.print("\n[yellow]Navigation (File System Style):[/yellow]")
+        console.print("  cd <relationship>        - Navigate into related records (e.g., 'cd Opportunities')")
         console.print("  cd ..                    - Go back to previous context")
-        console.print("  back                     - Go back to previous context")
-        console.print("  ls / dir                 - List current context (shows first 10)")
-        console.print("  ls --all / ls -a         - List all records")
-        console.print("  ls -n <number>           - List specific number of records (e.g., 'ls -n 50')")
-        console.print("  ls | sort <field> [-desc|-asc] - List and sort by field (e.g., 'ls | sort CreatedDate -desc')")
+        console.print("  ls / dir                 - List contents (shows first 10 by default)")
+        console.print("  ls --all / ls -a         - List all records (up to 200)")
+        console.print("  ls -n <number>           - List specific number (e.g., 'ls -n 50')")
+        console.print("  ls | sort <field> -desc  - Sort descending (e.g., 'ls | sort CreatedDate -desc')")
+        console.print("  ls | sort <field> -asc   - Sort ascending (e.g., 'ls | sort Name -asc')")
+        console.print("")
+        console.print("[yellow]Other:[/yellow]")
         console.print("  clear                    - Clear screen")
         console.print("  exit / quit              - Exit the CLI")
         console.print()
