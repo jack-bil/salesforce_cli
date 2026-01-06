@@ -218,7 +218,18 @@ class InteractiveSession:
             if '|' in user_input:
                 self._handle_ls_with_pipe(user_input)
             else:
-                self._handle_ls()
+                # Parse display limit: ls, ls -n 50, ls --all
+                display_limit = 10  # Default
+                if '-n' in args:
+                    try:
+                        parts = args.split('-n')
+                        display_limit = int(parts[1].strip().split()[0])
+                    except (ValueError, IndexError):
+                        display_error("Invalid -n value. Usage: ls -n <number>")
+                        return
+                elif '--all' in args or '-a' in args:
+                    display_limit = None  # Show all
+                self._handle_ls(display_limit)
         
         elif command == 'clear':
             console.clear()
@@ -322,7 +333,9 @@ class InteractiveSession:
         console.print("  cd <relationship>        - Navigate to related records (e.g., 'cd Opportunities')")
         console.print("  cd ..                    - Go back to previous context")
         console.print("  back                     - Go back to previous context")
-        console.print("  ls / dir                 - List current context (show table)")
+        console.print("  ls / dir                 - List current context (shows first 10)")
+        console.print("  ls --all / ls -a         - List all records")
+        console.print("  ls -n <number>           - List specific number of records (e.g., 'ls -n 50')")
         console.print("  ls | sort <field> [-desc|-asc] - List and sort by field (e.g., 'ls | sort CreatedDate -desc')")
         console.print("  clear                    - Clear screen")
         console.print("  exit / quit              - Exit the CLI")
@@ -693,11 +706,12 @@ class InteractiveSession:
                     return
         else:
             try:
-                # Query for related records
+                # Query for related records with increased limit
                 related_records = self.client.get_related_records(
                     self.current_object,
                     self.current_record['Id'],
-                    relationship_name
+                    relationship_name,
+                    limit=200
                 )
             except Exception as e:
                 display_error(f"Failed to navigate to related records: {e}")
@@ -729,19 +743,31 @@ class InteractiveSession:
         except Exception as e:
             display_error(f"Failed to navigate to related records: {e}")
     
-    def _handle_ls(self):
+    def _handle_ls(self, display_limit: Optional[int] = 10):
         """Handle ls/dir command to display current context."""
         if self.related_records:
-            # Display related records
+            # Display related records (limited)
+            records_to_show = self.related_records if display_limit is None else self.related_records[:display_limit]
             parent_name = self.navigation_path[0] if self.navigation_path else "Record"
-            display_related_records(self.related_records, self.related_type, parent_name)
+            display_related_records(records_to_show, self.related_type, parent_name)
             if self.related_records:
-                display_info("Type a number to select a record")
+                total = len(self.related_records)
+                shown = len(records_to_show)
+                if shown < total:
+                    display_info(f"Showing {shown} of {total} records. Use 'ls --all' or 'ls -n <number>' to see more")
+                else:
+                    display_info("Type a number to select a record")
         elif self.current_records:
-            # Display search results
-            display_search_results(self.current_records, self.current_object)
+            # Display search results (limited)
+            records_to_show = self.current_records if display_limit is None else self.current_records[:display_limit]
+            display_search_results(records_to_show, self.current_object)
             if self.current_records:
-                display_info("Type a number to select a record")
+                total = len(self.current_records)
+                shown = len(records_to_show)
+                if shown < total:
+                    display_info(f"Showing {shown} of {total} records. Use 'ls --all' or 'ls -n <number>' to see more")
+                else:
+                    display_info("Type a number to select a record")
         elif self.current_record:
             # Display available relationships like a directory listing
             try:
@@ -798,6 +824,19 @@ class InteractiveSession:
             display_error("Invalid pipe syntax. Usage: ls | sort <FieldName> [-desc|-asc]")
             return
         
+        # Check for display limit in the ls part
+        ls_part = parts[0].strip()
+        display_limit = 10  # Default
+        if '-n' in ls_part:
+            try:
+                ls_parts = ls_part.split('-n')
+                display_limit = int(ls_parts[1].strip().split()[0])
+            except (ValueError, IndexError):
+                display_error("Invalid -n value. Usage: ls -n <number> | sort ...")
+                return
+        elif '--all' in ls_part or '-a' in ls_part:
+            display_limit = None  # Show all
+        
         pipe_command = parts[1].strip()
         
         # Parse sort command
@@ -823,20 +862,47 @@ class InteractiveSession:
                 display_error("Invalid sort order. Use -desc or -asc")
                 return
         
-        # Sort and display
+        # Re-query and display
         if self.related_records:
-            sorted_records = self._sort_records(self.related_records, field_name, descending)
-            if sorted_records is not None:
+            # Re-query with ORDER BY instead of sorting in memory
+            try:
+                sorted_records = self.client.get_related_records(
+                    self.current_object,
+                    self.current_record['Id'],
+                    self.related_type,
+                    limit=200,
+                    order_by=field_name,
+                    order_desc=descending
+                )
+                # Update the cached records with sorted results
+                self.related_records = sorted_records
+                
+                # Apply display limit
+                records_to_show = sorted_records if display_limit is None else sorted_records[:display_limit]
                 parent_name = self.navigation_path[0] if self.navigation_path else "Record"
-                display_related_records(sorted_records, self.related_type, parent_name)
+                display_related_records(records_to_show, self.related_type, parent_name)
                 if sorted_records:
-                    display_info("Type a number to select a record")
+                    total = len(sorted_records)
+                    shown = len(records_to_show)
+                    if shown < total:
+                        display_info(f"Showing {shown} of {total} records. Use 'ls --all | sort ...' to see more")
+                    else:
+                        display_info("Type a number to select a record")
+            except Exception as e:
+                display_error(f"Failed to sort records: {e}")
+                
         elif self.current_records:
             sorted_records = self._sort_records(self.current_records, field_name, descending)
             if sorted_records is not None:
-                display_search_results(sorted_records, self.current_object)
+                records_to_show = sorted_records if display_limit is None else sorted_records[:display_limit]
+                display_search_results(records_to_show, self.current_object)
                 if sorted_records:
-                    display_info("Type a number to select a record")
+                    total = len(sorted_records)
+                    shown = len(records_to_show)
+                    if shown < total:
+                        display_info(f"Showing {shown} of {total} records. Use 'ls --all | sort ...' to see more")
+                    else:
+                        display_info("Type a number to select a record")
         elif self.current_record:
             display_info("Cannot sort a single record. Use 'ls' without sort.")
         else:

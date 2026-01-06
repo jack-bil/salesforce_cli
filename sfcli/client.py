@@ -229,7 +229,9 @@ class SalesforceClient:
         return result['records'][0]
     
     def get_related_records(self, object_type: str, record_id: str, 
-                          relationship_name: str, limit: int = 10) -> List[Dict[str, Any]]:
+                          relationship_name: str, limit: int = 10, 
+                          order_by: Optional[str] = None, 
+                          order_desc: bool = False) -> List[Dict[str, Any]]:
         """
         Get related records (e.g., Contacts for an Account).
         
@@ -238,6 +240,8 @@ class SalesforceClient:
             record_id: Parent record ID
             relationship_name: Relationship name (e.g., 'Contacts', 'Opportunities')
             limit: Maximum number of results
+            order_by: Optional field name to sort by
+            order_desc: Whether to sort descending (default: False/ascending)
             
         Returns:
             List of related records
@@ -279,12 +283,23 @@ class SalesforceClient:
         
         # Get appropriate fields for this object type
         fields = self._get_query_fields(actual_object)
+        
+        # Add the order_by field if specified and not already included
+        if order_by and order_by not in fields:
+            fields.append(order_by)
+        
         fields_str = ', '.join(fields)
+        
+        # Build ORDER BY clause
+        order_clause = ""
+        if order_by:
+            order_direction = "DESC" if order_desc else "ASC"
+            order_clause = f" ORDER BY {order_by} {order_direction}"
         
         soql = f"""
             SELECT {fields_str}
             FROM {actual_object}
-            WHERE {relationship_field} = '{record_id}'
+            WHERE {relationship_field} = '{record_id}'{order_clause}
             LIMIT {limit}
         """
         
